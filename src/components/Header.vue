@@ -5,7 +5,7 @@ import { store, loadData, unloadData, decompress } from '../store.js';
 import { RouterLink, useRoute } from 'vue-router';
 import ConfigMenu from './ConfigMenu.vue'
 import SearchWindow from './SearchWindow.vue'
-import { availableCoverageTypes, getPathChildren, getRate, hasTableForFile, pathType } from '../store.js';
+import { availableCoverageTypes, getPathChildren, getRate, getRateColor, hasTableForFile, pathType } from '../store.js';
 
 const props = defineProps({
   date: String,
@@ -218,24 +218,160 @@ function buildCurrentViewMarkdown() {
   return `${lines.join('\n').trim()}\n`;
 }
 
-async function copyCurrentViewMarkdown() {
-  const markdown = buildCurrentViewMarkdown();
+function escapeHtml(text) {
+  return String(text)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
 
-  try {
-    await navigator.clipboard.writeText(markdown);
-  } catch (_) {
-    const textArea = document.createElement('textarea');
-    textArea.value = markdown;
-    textArea.style.position = 'fixed';
-    textArea.style.opacity = '0';
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-    document.execCommand('copy');
-    document.body.removeChild(textArea);
+function buildCoverageTableRows(summary) {
+  return availableCoverageTypes().map((type) => {
+    const stats = summary[type] ?? { hits: 0, total: 0 };
+    const rate = getRate(stats);
+    return {
+      type,
+      hits: stats.hits ?? 0,
+      total: stats.total ?? 0,
+      rate,
+      rateText: `${rate}%`,
+    };
+  });
+}
+
+function buildChildEntriesRows(path) {
+  const coverageTypes = availableCoverageTypes();
+  const children = getPathChildren(path);
+  const prefix = path ? `${path}/` : '';
+
+  return children
+    .map((name) => {
+      const fullPath = `${prefix}${name}`;
+      const summary = store.summaries[fullPath] ?? {};
+      return {
+        name,
+        kind: pathType(fullPath),
+        rates: coverageTypes.map((type) => {
+          const rate = getRate(summary[type] ?? { hits: 0, total: 0 });
+          return {
+            rate,
+            text: `${rate}%`,
+          };
+        }),
+      };
+    })
+    .sort((a, b) => {
+      if (a.kind !== b.kind) {
+        return a.kind === 'file' ? 1 : -1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+}
+
+function buildCurrentViewHtml() {
+  const coverageTypes = availableCoverageTypes();
+  const selectionLines = currentSelectionLines();
+  const parts = [
+    `<h1>${escapeHtml(props.title || 'Coverview')}</h1>`,
+    `<h2>${escapeHtml(currentViewLabel())}</h2>`,
+  ];
+
+  if (selectionLines.length > 0) {
+    parts.push('<ul>');
+    for (const line of selectionLines) {
+      parts.push(`<li>${escapeHtml(line).replaceAll('`', '<code>').replace(/<code>(.*?)<code>/g, '<code>$1</code>')}</li>`);
+    }
+    parts.push('</ul>');
   }
 
-  exportStatus.value = 'Copied markdown';
+  if (dataLoaded.value && Object.keys(currentSummary.value).length > 0) {
+    const rows = buildCoverageTableRows(currentSummary.value);
+    parts.push('<table><thead><tr><th>Coverage type</th><th>Hits</th><th>Total</th><th>Rate</th></tr></thead><tbody>');
+    for (const row of rows) {
+      parts.push(`<tr><td>${escapeHtml(row.type)}</td><td>${row.hits}</td><td>${row.total}</td><td style="${coverageCellStyle(row.rate)}">${escapeHtml(row.rateText)}</td></tr>`);
+    }
+    parts.push('</tbody></table>');
+  }
+
+  if (currentViewKind.value === 'overview' || currentViewKind.value === 'dir') {
+    const rows = buildChildEntriesRows(currentPath.value);
+    if (rows.length > 0) {
+      parts.push('<h3>Entries</h3>');
+      parts.push(`<table><thead><tr><th>Source</th>${coverageTypes.map((type) => `<th>${escapeHtml(type)}</th>`).join('')}</tr></thead><tbody>`);
+      for (const row of rows) {
+        parts.push(`<tr><td>${escapeHtml(row.kind)} <code>${escapeHtml(row.name)}</code></td>${row.rates.map((rate) => `<td style="${coverageCellStyle(rate.rate)}">${escapeHtml(rate.text)}</td>`).join('')}</tr>`);
+      }
+      parts.push('</tbody></table>');
+    }
+  }
+
+  parts.push('<ul>');
+  parts.push(`<li>Route: <code>${escapeHtml(route.fullPath)}</code></li>`);
+  if (props.repo) {
+    parts.push(`<li>Repo: <code>${escapeHtml(props.repo)}</code></li>`);
+  }
+  if (props.branch) {
+    parts.push(`<li>Branch: <code>${escapeHtml(props.branch)}</code></li>`);
+  }
+  if (props.commit) {
+    parts.push(`<li>Commit: <code>${escapeHtml(props.commit.substring(0, 8))}</code></li>`);
+  }
+  parts.push('</ul>');
+
+  return parts.join('');
+}
+
+function coverageCellStyle(rate) {
+  const base = getRateColor(rate, false).replace('#', '');
+  const red = parseInt(base.slice(0, 2), 16);
+  const green = parseInt(base.slice(2, 4), 16);
+  const blue = parseInt(base.slice(4, 6), 16);
+  const mix = (channel) => Math.round(channel + (255 - channel) * 0.72);
+  const background = `rgb(${mix(red)}, ${mix(green)}, ${mix(blue)})`;
+  const foreground = '#111827';
+  return [
+    `background-color: ${background}`,
+    `color: ${foreground}`,
+    'font-weight: 600',
+    'text-align: right',
+    'padding: 4px 8px',
+  ].join('; ');
+}
+
+async function copyCurrentViewMarkdown() {
+  const markdown = buildCurrentViewMarkdown();
+  const html = buildCurrentViewHtml();
+
+  try {
+    if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/plain': new Blob([markdown], { type: 'text/plain' }),
+          'text/html': new Blob([html], { type: 'text/html' }),
+        }),
+      ]);
+    } else {
+      throw new Error('Rich clipboard write is unavailable');
+    }
+  } catch (_) {
+    try {
+      await navigator.clipboard.writeText(markdown);
+    } catch (_) {
+      const textArea = document.createElement('textarea');
+      textArea.value = markdown;
+      textArea.style.position = 'fixed';
+      textArea.style.opacity = '0';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+    }
+  }
+
+  exportStatus.value = 'Copied rich text';
   window.setTimeout(() => {
     exportStatus.value = '';
   }, 2000);
@@ -330,8 +466,8 @@ const returnFromAllTables = () => {
             class="header-button"
             v-if="dataLoaded"
             @click="copyCurrentViewMarkdown"
-            :title="exportStatus || 'Copy current view as Markdown'"
-            :aria-label="exportStatus || 'Copy current view as Markdown'"
+            :title="exportStatus || 'Copy current view as rich text'"
+            :aria-label="exportStatus || 'Copy current view as rich text'"
           >
             <img class="copy-icon" src="../assets/copy.svg" alt="Copy Markdown">
           </button>
