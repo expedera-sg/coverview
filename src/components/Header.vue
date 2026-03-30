@@ -5,6 +5,7 @@ import { store, loadData, unloadData, decompress } from '../store.js';
 import { RouterLink, useRoute } from 'vue-router';
 import ConfigMenu from './ConfigMenu.vue'
 import SearchWindow from './SearchWindow.vue'
+import { availableCoverageTypes, getPathChildren, getRate, hasTableForFile, pathType } from '../store.js';
 
 const props = defineProps({
   date: String,
@@ -16,6 +17,7 @@ const props = defineProps({
 })
 
 const route = useRoute();
+const exportStatus = ref('');
 
 document.addEventListener("keyup", (e) => {
   if (e.ctrlKey && e.key == 'k') {
@@ -56,6 +58,188 @@ const queryWithoutHighlight = computed(() => {
 const showFilePicker = Object.keys(originalFiles).length === 0;
 
 const dataLoaded = computed(() => store.dataLoaded)
+const currentPath = computed(() => route.params.path ?? "");
+
+const currentViewKind = computed(() => {
+  if (route.path === '/tables') {
+    return 'tables';
+  }
+  if (!dataLoaded.value) {
+    return 'none';
+  }
+  if (hasTableForFile(currentPath.value) && ((route.query?.showTable?.toLowerCase() === "true") ?? false)) {
+    return 'table';
+  }
+  return pathType(currentPath.value) ?? 'overview';
+});
+
+const currentSummary = computed(() => {
+  if (!dataLoaded.value) {
+    return {};
+  }
+  return store.summaries[currentPath.value] ?? {};
+});
+
+function formatCoverageTable(summary) {
+  const coverageTypes = availableCoverageTypes();
+  const lines = [
+    '| Coverage type | Hits | Total | Rate |',
+    '| --- | ---: | ---: | ---: |',
+  ];
+
+  for (const type of coverageTypes) {
+    const stats = summary[type] ?? { hits: 0, total: 0 };
+    lines.push(`| ${type} | ${stats.hits ?? 0} | ${stats.total ?? 0} | ${getRate(stats)}% |`);
+  }
+
+  return lines.join('\n');
+}
+
+function formatChildEntriesTable(path) {
+  const coverageTypes = availableCoverageTypes();
+  const children = getPathChildren(path);
+  const prefix = path ? `${path}/` : '';
+
+  const items = children
+    .map((name) => {
+      const fullPath = `${prefix}${name}`;
+      const summary = store.summaries[fullPath] ?? {};
+      return {
+        name,
+        path: fullPath,
+        kind: pathType(fullPath),
+        summary,
+      };
+    })
+    .sort((a, b) => {
+      if (a.kind !== b.kind) {
+        return a.kind === 'file' ? 1 : -1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+
+  if (items.length === 0) {
+    return '';
+  }
+
+  const header = ['Source', ...coverageTypes];
+  const separator = ['---', ...coverageTypes.map(() => '---:')];
+  const lines = [
+    `| ${header.join(' | ')} |`,
+    `| ${separator.join(' | ')} |`,
+  ];
+
+  for (const item of items) {
+    const row = [`${item.kind === 'file' ? 'file' : 'dir'} \`${item.name}\``];
+    for (const type of coverageTypes) {
+      const stats = item.summary[type] ?? { hits: 0, total: 0 };
+      row.push(`${getRate(stats)}%`);
+    }
+    lines.push(`| ${row.join(' | ')} |`);
+  }
+
+  return lines.join('\n');
+}
+
+function currentViewLabel() {
+  switch (currentViewKind.value) {
+    case 'tables':
+      return 'All tables';
+    case 'table':
+      return `Table view: \`${currentPath.value}\``;
+    case 'file':
+      return `File view: \`${currentPath.value}\``;
+    case 'dir':
+      return currentPath.value ? `Directory view: \`${currentPath.value}\`` : 'Overview';
+    default:
+      return 'Overview';
+  }
+}
+
+function currentSelectionLines() {
+  const lines = [];
+
+  if (store.selectedDataset) {
+    lines.push(`- Dataset: \`${store.selectedDataset}\``);
+  }
+  if (route.query.L) {
+    lines.push(`- Selected lines: \`${route.query.L}\``);
+  }
+  if (route.query.T) {
+    lines.push(`- Selected table entry: \`${route.query.T}\``);
+  }
+  if (route.query.showTable === 'true' && currentPath.value) {
+    lines.push(`- Table mode enabled for: \`${currentPath.value}\``);
+  }
+
+  return lines;
+}
+
+function buildCurrentViewMarkdown() {
+  const lines = [
+    `# ${props.title || 'Coverview'}`,
+    '',
+    `## ${currentViewLabel()}`,
+    '',
+  ];
+
+  const selectionLines = currentSelectionLines();
+  lines.push(...selectionLines);
+  if (selectionLines.length > 0) {
+    lines.push('');
+  }
+
+  if (dataLoaded.value && Object.keys(currentSummary.value).length > 0) {
+    lines.push(formatCoverageTable(currentSummary.value));
+    lines.push('');
+  }
+
+  if (currentViewKind.value === 'overview' || currentViewKind.value === 'dir') {
+    const childTable = formatChildEntriesTable(currentPath.value);
+    if (childTable) {
+      lines.push('### Entries');
+      lines.push('');
+      lines.push(childTable);
+      lines.push('');
+    }
+  }
+
+  lines.push(`- Route: \`${route.fullPath}\``);
+  if (props.repo) {
+    lines.push(`- Repo: \`${props.repo}\``);
+  }
+  if (props.branch) {
+    lines.push(`- Branch: \`${props.branch}\``);
+  }
+  if (props.commit) {
+    lines.push(`- Commit: \`${props.commit.substring(0, 8)}\``);
+  }
+
+  return `${lines.join('\n').trim()}\n`;
+}
+
+async function copyCurrentViewMarkdown() {
+  const markdown = buildCurrentViewMarkdown();
+
+  try {
+    await navigator.clipboard.writeText(markdown);
+  } catch (_) {
+    const textArea = document.createElement('textarea');
+    textArea.value = markdown;
+    textArea.style.position = 'fixed';
+    textArea.style.opacity = '0';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textArea);
+  }
+
+  exportStatus.value = 'Copied markdown';
+  window.setTimeout(() => {
+    exportStatus.value = '';
+  }, 2000);
+}
 
 async function onFileUpload(event) {
   const file = event.target.files[0];
@@ -142,6 +326,16 @@ const returnFromAllTables = () => {
           <span class="info-item metadata" v-if="store?.metadata?._additional">
             <img src="../assets/fingerprint.svg" alt="Metadata icon" :title="store.metadata._additional" />
           </span>
+          <button
+            class="header-button"
+            v-if="dataLoaded"
+            @click="copyCurrentViewMarkdown"
+            :title="exportStatus || 'Copy current view as Markdown'"
+            :aria-label="exportStatus || 'Copy current view as Markdown'"
+          >
+            <img class="copy-icon" src="../assets/copy.svg" alt="Copy Markdown">
+          </button>
+          <span v-if="exportStatus" class="copy-status">{{ exportStatus }}</span>
           <button class="header-button" v-if="dataLoaded" @click="store.showSearchWindow = true">
             <img src="../assets/search.svg">
           </button>
@@ -198,6 +392,35 @@ input[type="file"] {
 .header-button {
   background: none;
   border: none;
+  color: #d4d4d8;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.header-button:hover {
+  color: #f5f5f5;
+}
+
+.header-button img {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.copy-icon {
+  filter: brightness(0) saturate(100%) invert(88%) sepia(7%) saturate(174%) hue-rotate(202deg) brightness(94%) contrast(91%);
+}
+
+.header-button:hover .copy-icon {
+  filter: brightness(0) saturate(100%) invert(98%) sepia(3%) saturate(271%) hue-rotate(269deg) brightness(113%) contrast(92%);
+}
+
+.copy-status {
+  color: #86efac;
+  font-size: 0.8rem;
+  white-space: nowrap;
 }
 
 .logo {
