@@ -50,6 +50,8 @@ class Line {
     this.groups = null;
     /** @type {Set<string>} */
     this.sources = new Set();
+    /** @type {Set<string>} */
+    this.origins = new Set();
   }
 
   /**
@@ -216,7 +218,7 @@ export function parseInfo(filename, content, records) {
 }
 
 // returns list of tests
-export function parseDesc(filename, content, records) {
+export function parseDesc(filename, content, records, targetField = "sources") {
   const allTests = new Set();
   for (const [name, lines] of getRecords(filename, content, "SN")) {
     /** @type {Record} */
@@ -236,7 +238,7 @@ export function parseDesc(filename, content, records) {
         }
         for(const test of tests.split(";")) {
           allTests.add(test);
-          line.sources.add(test);
+          line[targetField].add(test);
         }
       }
       // Ignore other prefixes

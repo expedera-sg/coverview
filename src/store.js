@@ -4,6 +4,20 @@ import { XzReadableStream } from 'xz-decompress';
 import { Record, parseInfo, parseDesc, unifySourcePath, parseTable } from './parse';
 import router from './router/index.js'
 
+function getRbyCoverviewConfig(config, dataset) {
+  const rby = config?.additional?.covrby_coverview;
+  if (!rby) {
+    return null;
+  }
+  if (typeof rby === 'object' && ('branch_desc' in rby || 'expression_desc' in rby || 'toggle_desc' in rby)) {
+    return rby;
+  }
+  if (typeof rby === 'object' && dataset in rby) {
+    return rby[dataset];
+  }
+  return null;
+}
+
 /**
  * @typedef {{[coverageType: string]: Record}} Records
  * @typedef {{records: Records, source: string}} File
@@ -169,6 +183,26 @@ export function loadData(inputFiles, fromUploadedFile = false) {
           };
         }
         allFiles[dataset][filename].records[coverageType] = record;
+      }
+    }
+
+    const rbyConfig = getRbyCoverviewConfig(config, dataset);
+    if (rbyConfig) {
+      for (const [coverageType, descField] of [["branch", "branch_desc"], ["expression", "expression_desc"], ["toggle", "toggle_desc"]]) {
+        const descFile = rbyConfig?.[descField];
+        if (!descFile || !(descFile in inputFiles) || !(dataset in allFiles)) {
+          continue;
+        }
+        const records = Object.fromEntries(Object.entries(allFiles[dataset])
+          .map(([filename, file]) => [filename, file.records[coverageType]])
+          .filter(([, record]) => !!record));
+        if (Object.keys(records).length === 0) {
+          continue;
+        }
+        const label = `Loading .desc file: ${descFile} (${coverageType})`;
+        console.time(label);
+        parseDesc(descFile, inputFiles[descFile], records, "origins");
+        console.timeEnd(label);
       }
     }
   }

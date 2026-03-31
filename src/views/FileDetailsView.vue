@@ -58,8 +58,7 @@ const lines = computed(() => Array.from(Array(lineCount).keys())
     .map(i => {
       const coverageData = {};
       let hasGroups = Object.create(null);
-      let hitOrigins = []; // this is a bit hacky, as we only have "line" inside the loop
-      // we use hitOrigins as the tests which hit the line since "source" is confusing
+      let provenanceByType = Object.create(null);
       for (const [type, record] of Object.entries(file.value.records)) {
         if (!store.hiddenCoverageTypes[type]) {
           const line = record.lines[i + 1];
@@ -67,11 +66,23 @@ const lines = computed(() => Array.from(Array(lineCount).keys())
             hasGroups[type] = line.hasGroups;
             const [hits, total] = line.stats(store);
             coverageData[type] = { hits, total };
-            hitOrigins = Array.from(line.sources);
+            if (type === 'line') {
+              provenanceByType[type] = Array.from(line.sources);
+            } else {
+              provenanceByType[type] = Array.from(line.origins);
+            }
           }
         }
       }
-      const lineData = { n: i + 1, coverageData, color: getColor(coverageData, store.metadata.warning_threshold), showDetails: ref(''), showOrigins: ref(false), hitOrigins, hasGroups };
+      const lineData = {
+        n: i + 1,
+        coverageData,
+        color: getColor(coverageData, store.metadata.warning_threshold),
+        showDetails: ref(''),
+        showOrigins: ref(''),
+        provenanceByType,
+        hasGroups
+      };
       if (code) lineData.code = code[i];
       return lineData;
     }));
@@ -80,7 +91,7 @@ const toggleDetails = (line, type) => {
   line.showDetails.value = (line.showDetails.value === type) ? '' : type;
 }
 
-const toggleLineOrigins = (line, value) => {
+const setLineOriginsType = (line, value) => {
   line.showOrigins.value = value;
 }
 
@@ -208,14 +219,14 @@ const showTable = ref(false);
                   <img class="icon" v-if="line.showDetails.value === type" src="../assets/minus.svg" alt="collapse"/>
                   <img class="icon" v-else src="../assets/plus.svg" alt="expand"/>
               </span>
-              <span v-if="line.coverageData[type] && !store.hiddenCoverageTypes[type]">{{ line.coverageData[type].hits }}/{{ line.coverageData[type].total }}
-                  <div class="remarks" @mouseleave="toggleLineOrigins(line, false)">
+              <span v-if="line.coverageData[type] && !store.hiddenCoverageTypes[type]" class="coverage-value">{{ line.coverageData[type].hits }}/{{ line.coverageData[type].total }}
+                  <span class="remarks" v-if="(line.provenanceByType[type] ?? []).length > 0" @mouseleave="setLineOriginsType(line, '')">
                       <ul>
-                          <li class="remark" v-if="!line.showOrigins.value" v-for="origin in line.hitOrigins.slice(0, originThreshold)">{{origin}}</li>
-                          <li class="remark" v-else v-for="origin in line.hitOrigins">{{origin}}</li>
-                          <li class="remark" style="cursor: pointer;" @click="toggleLineOrigins(line, true)" v-if="!line.showOrigins.value && line.hitOrigins.length > originThreshold">Show more...</li>
+                          <li class="remark" v-if="line.showOrigins.value !== type" v-for="origin in (line.provenanceByType[type] ?? []).slice(0, originThreshold)">{{origin}}</li>
+                          <li class="remark" v-else v-for="origin in (line.provenanceByType[type] ?? [])">{{origin}}</li>
+                          <li class="remark" style="cursor: pointer;" @click="setLineOriginsType(line, type)" v-if="line.showOrigins.value !== type && (line.provenanceByType[type] ?? []).length > originThreshold">Show more...</li>
                       </ul>
-                  </div>
+                  </span>
               </span>
             </span>
           </td>
@@ -376,11 +387,11 @@ td:first-of-type {
   height: 13px;
 }
 
-span .remarks {
+.coverage-value .remarks {
     display: none;
 }
 
-span:hover .remarks {
+.coverage-value:hover .remarks {
     display: block;
     position: absolute;
     z-index: 9999 !important;
@@ -388,7 +399,7 @@ span:hover .remarks {
     top: var(--tooltip-top, auto);
 }
 
-span:hover .remarks ul {
+.coverage-value:hover .remarks ul {
     width: max-content;
     position: relative;
      top: 0;
@@ -397,7 +408,7 @@ span:hover .remarks ul {
      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
      z-index: 100000;
 }
-span:hover .remarks ul .remark {
+.coverage-value:hover .remarks ul .remark {
     width: 100%;
     display: flex;
     flex-direction: column;
@@ -410,13 +421,13 @@ span:hover .remarks ul .remark {
     border-bottom: 1px solid;
 }
 
-span:hover .remarks ul .remark:first-child {
+.coverage-value:hover .remarks ul .remark:first-child {
     border-top-left-radius: 6px;
     border-top-right-radius: 6px;
     border-top: 1px solid;
 }
 
-span:hover .remarks ul .remark:last-child {
+.coverage-value:hover .remarks ul .remark:last-child {
     border-bottom: 1px solid;
     border-bottom-left-radius: 6px;
     border-bottom-right-radius: 6px;
