@@ -236,7 +236,7 @@ function buildCoverageTableRows(summary) {
       hits: stats.hits ?? 0,
       total: stats.total ?? 0,
       rate,
-      rateText: `${rate}%`,
+      rateText: rate === 'N/A' ? 'N/A' : `${rate}%`,
     };
   });
 }
@@ -257,7 +257,7 @@ function buildChildEntriesRows(path) {
           const rate = getRate(summary[type] ?? { hits: 0, total: 0 });
           return {
             rate,
-            text: `${rate}%`,
+            text: rate === 'N/A' ? 'N/A' : `${rate}%`,
           };
         }),
       };
@@ -288,7 +288,7 @@ function buildCurrentViewHtml() {
 
   if (dataLoaded.value && Object.keys(currentSummary.value).length > 0) {
     const rows = buildCoverageTableRows(currentSummary.value);
-    parts.push('<table><thead><tr><th>Coverage type</th><th>Hits</th><th>Total</th><th>Rate</th></tr></thead><tbody>');
+    parts.push('<table style="border-collapse: collapse; width: 100%;"><colgroup><col style="width: 44%;"><col style="width: 18%;"><col style="width: 18%;"><col style="width: 20%;"></colgroup><thead><tr><th style="text-align: left;">Coverage type</th><th style="text-align: right;">Hits</th><th style="text-align: right;">Total</th><th style="text-align: right;">Rate</th></tr></thead><tbody>');
     for (const row of rows) {
       parts.push(`<tr><td>${escapeHtml(row.type)}</td><td>${row.hits}</td><td>${row.total}</td><td style="${coverageCellStyle(row.rate)}">${escapeHtml(row.rateText)}</td></tr>`);
     }
@@ -299,7 +299,9 @@ function buildCurrentViewHtml() {
     const rows = buildChildEntriesRows(currentPath.value);
     if (rows.length > 0) {
       parts.push('<h3>Entries</h3>');
-      parts.push(`<table><thead><tr><th>Source</th>${coverageTypes.map((type) => `<th>${escapeHtml(type)}</th>`).join('')}</tr></thead><tbody>`);
+      const sourceWidth = 52;
+      const metricWidth = Math.floor((100 - sourceWidth) / Math.max(coverageTypes.length, 1));
+      parts.push(`<table style="border-collapse: collapse; width: 100%;"><colgroup><col style="width: ${sourceWidth}%;"></col>${coverageTypes.map(() => `<col style="width: ${metricWidth}%;"></col>`).join('')}</colgroup><thead><tr><th style="text-align: left;">Source</th>${coverageTypes.map((type) => `<th style="text-align: right;">${escapeHtml(type)}</th>`).join('')}</tr></thead><tbody>`);
       for (const row of rows) {
         parts.push(`<tr><td>${escapeHtml(row.kind)} <code>${escapeHtml(row.name)}</code></td>${row.rates.map((rate) => `<td style="${coverageCellStyle(rate.rate)}">${escapeHtml(rate.text)}</td>`).join('')}</tr>`);
       }
@@ -324,12 +326,18 @@ function buildCurrentViewHtml() {
 }
 
 function coverageCellStyle(rate) {
-  const base = getRateColor(rate, false).replace('#', '');
-  const red = parseInt(base.slice(0, 2), 16);
-  const green = parseInt(base.slice(2, 4), 16);
-  const blue = parseInt(base.slice(4, 6), 16);
-  const mix = (channel) => Math.round(channel + (255 - channel) * 0.72);
-  const background = `rgb(${mix(red)}, ${mix(green)}, ${mix(blue)})`;
+  let background = '#f3f4f6';
+  if (rate !== 'N/A') {
+    if (rate >= 80) {
+      background = '#dcfce7';
+    } else if (rate >= 60) {
+      background = '#fef3c7';
+    } else if (rate >= 1) {
+      background = '#ffedd5';
+    } else {
+      background = '#fee2e2';
+    }
+  }
   const foreground = '#111827';
   return [
     `background-color: ${background}`,
